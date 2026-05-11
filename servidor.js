@@ -97,6 +97,12 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
 const LIVEPLAY_AUTH_SECRET = String(process.env.LIVEPLAY_AUTH_SECRET || process.env.JWT_SECRET || 'dev-change-this-secret');
 const LIVEPLAY_ADMIN_SECRET = String(process.env.LIVEPLAY_ADMIN_SECRET || process.env.ADMIN_SECRET || '');
+const GOOGLE_CLIENT_ID = String(process.env.GOOGLE_CLIENT_ID || '').trim();
+const GOOGLE_CLIENT_SECRET = String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
+const GITHUB_CLIENT_ID = String(process.env.GITHUB_CLIENT_ID || '').trim();
+const GITHUB_CLIENT_SECRET = String(process.env.GITHUB_CLIENT_SECRET || '').trim();
+const OAUTH_REDIRECT_BASE = String(process.env.OAUTH_REDIRECT_BASE || PUBLIC_BASE_URL).replace(/\/$/, '');
+const oauthPendingSessions = new Map();
 const ACCESS_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 1 dia
 const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 dias
 
@@ -931,6 +937,193 @@ function adminHtml() {
 </script></body></html>`;
 }
 
+function oauthSuccessHtml() {
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LivePlay Login</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080d1a;color:#e5e7eb;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.card{max-width:520px;background:#0f172a;border:1px solid rgba(148,163,184,.24);border-radius:24px;padding:28px;box-shadow:0 24px 80px rgba(0,0,0,.35)}h1{margin:0 0 10px;font-size:28px}.muted{color:#a8b3cf;line-height:1.6}</style></head><body><div class="card"><h1>Login LivePlay confirmado ✅</h1><p class="muted">Você já pode voltar para o app. Esta janela pode ser fechada.</p></div></body></html>`;
+}
+
+function oauthErrorHtml(message) {
+  const safe = String(message || 'Falha no login social.').replace(/[<>&"]/g, (c) => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LivePlay Login</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080d1a;color:#e5e7eb;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.card{max-width:520px;background:#0f172a;border:1px solid rgba(248,113,113,.32);border-radius:24px;padding:28px;box-shadow:0 24px 80px rgba(0,0,0,.35)}h1{margin:0 0 10px;font-size:28px}.muted{color:#fecaca;line-height:1.6}</style></head><body><div class="card"><h1>Não foi possível entrar</h1><p class="muted">${safe}</p></div></body></html>`;
+}
+
+function cleanExpiredOAuthPending() {
+  const now = Date.now();
+  for (const [key, value] of oauthPendingSessions.entries()) {
+    if (!value?.expiresAt || value.expiresAt <= now) oauthPendingSessions.delete(key);
+  }
+}
+
+async function createOrGetOAuthUser(email) {
+  const cleanEmail = normalizeEmail(email);
+  if (!validateEmail(cleanEmail)) throw new Error('O provedor não retornou um email válido.');
+  const existing = await getUserByEmail(cleanEmail);
+  if (existing?.id) return existing;
+  const inserted = await supabaseRequest('liveplay_users', {
+    method: 'POST',
+    body: [{ email: cleanEmail, password_hash: hashPassword(crypto.randomUUID()) }],
+  });
+  const user = Array.isArray(inserted) ? inserted[0] || null : null;
+  if (!user?.id) throw new Error('Falha ao criar conta LivePlay pelo login social.');
+  await createFreeSubscription(user.id);
+  return user;
+}
+
+async function createOAuthSessionPayload(user, req) {
+  const subscription = await getSubscriptionForUser(user.id);
+  const plan = resolvePlanFromSubscription(subscription);
+  const session = await createActiveSessionTokenForUser(user, req);
+  return {
+    ok: true,
+    token: session.token,
+    refreshToken: session.refreshToken,
+    refreshExpiresAt: session.refreshExpiresAt,
+    sessionId: session.sessionId,
+    user: { id: session.user.id, email: session.user.email },
+    plan,
+  };
+}
+
+async function handleOAuthStart(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const provider = String(body.provider || '').toLowerCase();
+    if (!['google', 'github'].includes(provider)) {
+      return jsonResponse(res, 400, { ok: false, error: 'Provedor inválido.' });
+    }
+
+    if (provider === 'google' && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
+      return jsonResponse(res, 500, { ok: false, error: 'Google OAuth não configurado no Render.' });
+    }
+    if (provider === 'github' && (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET)) {
+      return jsonResponse(res, 500, { ok: false, error: 'GitHub OAuth não configurado no Render.' });
+    }
+
+    cleanExpiredOAuthPending();
+    const state = crypto.randomUUID();
+    oauthPendingSessions.set(state, { provider, status: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 10 * 60 * 1000 });
+    const redirectUri = `${OAUTH_REDIRECT_BASE}/auth/oauth/${provider}/callback`;
+    let authUrl = '';
+    if (provider === 'google') {
+      const params = new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: 'openid email profile',
+        access_type: 'offline',
+        prompt: 'select_account',
+        state,
+      });
+      authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    } else {
+      const params = new URLSearchParams({
+        client_id: GITHUB_CLIENT_ID,
+        redirect_uri: redirectUri,
+        scope: 'read:user user:email',
+        state,
+      });
+      authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
+    }
+    return jsonResponse(res, 200, { ok: true, provider, state, authUrl, expiresInSeconds: 600 });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao iniciar login social.' });
+  }
+}
+
+async function fetchGoogleOAuthEmail(code, redirectUri) {
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    }),
+  });
+  const tokenData = await tokenResponse.json().catch(() => null);
+  if (!tokenResponse.ok || !tokenData?.access_token) throw new Error('Falha ao autorizar Google.');
+  const infoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${tokenData.access_token}` },
+  });
+  const info = await infoResponse.json().catch(() => null);
+  if (!infoResponse.ok || !info?.email) throw new Error('Google não retornou email.');
+  return normalizeEmail(info.email);
+}
+
+async function fetchGitHubOAuthEmail(code, redirectUri) {
+  const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: GITHUB_CLIENT_ID,
+      client_secret: GITHUB_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+    }),
+  });
+  const tokenData = await tokenResponse.json().catch(() => null);
+  if (!tokenResponse.ok || !tokenData?.access_token) throw new Error('Falha ao autorizar GitHub.');
+
+  const userResponse = await fetch('https://api.github.com/user', {
+    headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'LivePlay' },
+  });
+  const userInfo = await userResponse.json().catch(() => null);
+  if (userResponse.ok && userInfo?.email) return normalizeEmail(userInfo.email);
+
+  const emailsResponse = await fetch('https://api.github.com/user/emails', {
+    headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'LivePlay' },
+  });
+  const emails = await emailsResponse.json().catch(() => null);
+  const primary = Array.isArray(emails) ? emails.find((item) => item?.primary && item?.verified && item?.email) || emails.find((item) => item?.verified && item?.email) : null;
+  if (!primary?.email) throw new Error('GitHub não retornou email verificado.');
+  return normalizeEmail(primary.email);
+}
+
+async function handleOAuthCallback(req, res, provider) {
+  try {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const code = String(url.searchParams.get('code') || '').trim();
+    const state = String(url.searchParams.get('state') || '').trim();
+    const pending = oauthPendingSessions.get(state);
+    if (!code || !state || !pending || pending.provider !== provider) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(oauthErrorHtml('Sessão OAuth inválida ou expirada. Volte ao app e tente novamente.'));
+      return;
+    }
+
+    const redirectUri = `${OAUTH_REDIRECT_BASE}/auth/oauth/${provider}/callback`;
+    const email = provider === 'google'
+      ? await fetchGoogleOAuthEmail(code, redirectUri)
+      : await fetchGitHubOAuthEmail(code, redirectUri);
+
+    const user = await createOrGetOAuthUser(email);
+    const sessionPayload = await createOAuthSessionPayload(user, req);
+    oauthPendingSessions.set(state, { ...pending, status: 'complete', session: sessionPayload, email, completedAt: Date.now(), expiresAt: Date.now() + 10 * 60 * 1000 });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(oauthSuccessHtml());
+  } catch (error) {
+    console.error('Erro OAuth callback:', error);
+    res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(oauthErrorHtml(error instanceof Error ? error.message : 'Falha no login social.'));
+  }
+}
+
+async function handleOAuthStatus(req, res) {
+  try {
+    cleanExpiredOAuthPending();
+    const url = new URL(req.url || '/', 'http://localhost');
+    const state = String(url.searchParams.get('state') || '').trim();
+    const pending = oauthPendingSessions.get(state);
+    if (!state || !pending) return jsonResponse(res, 404, { ok: false, error: 'Login social expirado ou não encontrado.' });
+    if (pending.status !== 'complete' || !pending.session) return jsonResponse(res, 200, { ok: true, status: 'pending' });
+    oauthPendingSessions.delete(state);
+    return jsonResponse(res, 200, { ok: true, status: 'complete', session: pending.session });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao consultar login social.' });
+  }
+}
+
 async function handleRegister(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -1314,6 +1507,27 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('LivePlay Backend Online 🚀\nAuth: /auth/register, /auth/login, /me/plan | Admin: /admin');
+    return;
+  }
+
+
+  if (req.url === '/auth/oauth/start' && req.method === 'POST') {
+    await handleOAuthStart(req, res);
+    return;
+  }
+
+  if (pathname === '/auth/oauth/status' && req.method === 'GET') {
+    await handleOAuthStatus(req, res);
+    return;
+  }
+
+  if (pathname === '/auth/oauth/google/callback' && req.method === 'GET') {
+    await handleOAuthCallback(req, res, 'google');
+    return;
+  }
+
+  if (pathname === '/auth/oauth/github/callback' && req.method === 'GET') {
+    await handleOAuthCallback(req, res, 'github');
     return;
   }
 
