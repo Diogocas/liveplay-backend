@@ -260,6 +260,116 @@ async function createFreeSubscription(userId) {
 }
 
 
+async function getAuthenticatedLivePlayUser(req) {
+  const payload = verifyToken(getBearerToken(req));
+  if (!payload?.userId) return null;
+  const user = await getUserById(payload.userId);
+  return user || null;
+}
+
+function sanitizeCloudPayload(payload) {
+  const cloned = JSON.parse(JSON.stringify(payload || {}));
+  // Segurança: nunca salvar sessão/token dentro do snapshot caso algum dia entre no state.
+  delete cloned.auth;
+  delete cloned.authSession;
+  delete cloned.token;
+  delete cloned.liveplayAuth;
+  return cloned;
+}
+
+async function getCloudSaveForUser(userId) {
+  const data = await supabaseRequest('liveplay_cloud_saves', {
+    query: `user_id=eq.${encodeURIComponent(userId)}&order=updated_at.desc&limit=1`,
+  });
+  return Array.isArray(data) ? data[0] || null : null;
+}
+
+async function handleCloudSave(req, res) {
+  try {
+    const user = await getAuthenticatedLivePlayUser(req);
+    if (!user?.id) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    const body = await readJsonBody(req);
+    const payload = sanitizeCloudPayload(body.payload ?? body.state ?? {});
+    const appVersion = String(body.appVersion || '').trim() || null;
+    const existing = await getCloudSaveForUser(user.id);
+
+    const record = {
+      user_id: user.id,
+      email: user.email,
+      app_version: appVersion,
+      payload,
+      updated_at: new Date().toISOString(),
+    };
+
+    let saved = null;
+    if (existing?.id) {
+      const updated = await supabaseRequest('liveplay_cloud_saves', {
+        method: 'PATCH',
+        query: `id=eq.${encodeURIComponent(existing.id)}`,
+        body: record,
+      });
+      saved = Array.isArray(updated) ? updated[0] || null : null;
+    } else {
+      const inserted = await supabaseRequest('liveplay_cloud_saves', {
+        method: 'POST',
+        body: [record],
+      });
+      saved = Array.isArray(inserted) ? inserted[0] || null : null;
+    }
+
+    return jsonResponse(res, 200, {
+      ok: true,
+      backup: {
+        id: saved?.id || existing?.id || null,
+        email: user.email,
+        appVersion: saved?.app_version || appVersion,
+        createdAt: saved?.created_at || existing?.created_at || null,
+        updatedAt: saved?.updated_at || record.updated_at,
+      },
+    });
+  } catch (error) {
+    return jsonResponse(res, 500, {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Falha ao salvar backup na nuvem.',
+    });
+  }
+}
+
+async function handleCloudLoad(req, res) {
+  try {
+    const user = await getAuthenticatedLivePlayUser(req);
+    if (!user?.id) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    const backup = await getCloudSaveForUser(user.id);
+    if (!backup) {
+      return jsonResponse(res, 200, { ok: true, backup: null });
+    }
+
+    return jsonResponse(res, 200, {
+      ok: true,
+      backup: {
+        id: backup.id,
+        email: backup.email || user.email,
+        appVersion: backup.app_version || null,
+        createdAt: backup.created_at || null,
+        updatedAt: backup.updated_at || null,
+        payload: backup.payload || null,
+      },
+    });
+  } catch (error) {
+    return jsonResponse(res, 500, {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Falha ao carregar backup da nuvem.',
+    });
+  }
+}
+
+
 function isAdminRequest(req) {
   const headerSecret = String(req.headers['x-liveplay-admin-secret'] || '').trim();
   const bearer = getBearerToken(req).trim();
@@ -851,6 +961,17 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/me/plan' && req.method === 'GET') {
     await handleMePlan(req, res);
+    return;
+  }
+
+
+  if (req.url === '/cloud/save' && req.method === 'POST') {
+    await handleCloudSave(req, res);
+    return;
+  }
+
+  if (req.url === '/cloud/load' && req.method === 'GET') {
+    await handleCloudLoad(req, res);
     return;
   }
 
