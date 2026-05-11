@@ -357,6 +357,67 @@ async function handleAdminSetPlan(req, res) {
   }
 }
 
+
+async function handleMercadoPagoWebhook(req, res) {
+  try {
+    const body = await readJsonBody(req);
+
+    console.log('Mercado Pago webhook:', JSON.stringify(body));
+
+    const paymentStatus =
+      body?.data?.status ||
+      body?.status ||
+      body?.action;
+
+    const payerEmail =
+      body?.payer?.email ||
+      body?.external_reference;
+
+    if (!payerEmail) {
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const normalizedEmail = String(payerEmail).trim().toLowerCase();
+
+    if (
+      String(paymentStatus).includes('approved') ||
+      String(paymentStatus).includes('payment.updated')
+    ) {
+      const userResult = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', normalizedEmail)
+        .single();
+
+      const user = userResult?.data;
+
+      if (user) {
+        const expiresAt = new Date();
+        expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+        await supabase
+          .from('subscriptions')
+          .upsert({
+            user_id: user.id,
+            plan: 'PRO',
+            status: 'active',
+            expires_at: expiresAt.toISOString(),
+          });
+
+        console.log('PRO ativado automaticamente:', normalizedEmail);
+      }
+    }
+
+    return sendJson(res, 200, { ok: true });
+  } catch (error) {
+    console.error('Erro webhook Mercado Pago:', error);
+    return sendJson(res, 500, {
+      ok: false,
+      error: 'mercadopago_webhook_failed',
+    });
+  }
+}
+
 function adminHtml() {
   return `<!doctype html>
 <html lang="pt-BR">
@@ -684,6 +745,12 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/payments/create-checkout' && req.method === 'POST') {
     await handleCreateCheckout(req, res);
+    return;
+  }
+
+
+  if (req.url === '/payments/webhook' && req.method === 'POST') {
+    await handleMercadoPagoWebhook(req, res);
     return;
   }
 
