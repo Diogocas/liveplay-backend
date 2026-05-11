@@ -362,6 +362,9 @@ function adminHtml() {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>LivePlay Admin</title>
+<link rel="manifest" href="/admin/manifest.json" />
+<meta name="theme-color" content="#080d1a" />
+<link rel="icon" href="/admin/icon.svg" type="image/svg+xml" />
 <style>
   body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#080d1a;color:#e5e7eb;margin:0;padding:28px}
   .wrap{max-width:980px;margin:0 auto;display:grid;gap:18px}
@@ -393,6 +396,7 @@ function adminHtml() {
 </div>
 <script>
 (function(){
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/admin/sw.js').catch(function(){}); }
   const logEl = document.getElementById('log');
   function secret(){ return document.getElementById('secret').value.trim(); }
   function log(v){ logEl.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); }
@@ -586,6 +590,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+
+
+  if (req.url === '/admin/manifest.json' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json; charset=utf-8' });
+    res.end(JSON.stringify({
+      name: 'LivePlay Admin',
+      short_name: 'LivePlay Admin',
+      description: 'Painel administrativo do LivePlay para gerenciar planos FREE/PRO.',
+      start_url: '/admin',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#080d1a',
+      theme_color: '#080d1a',
+      icons: [
+        { src: '/admin/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
+      ]
+    }));
+    return;
+  }
+
+  if (req.url === '/admin/icon.svg' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+    res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6d5dfc"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+      <rect width="256" height="256" rx="56" fill="#080d1a"/>
+      <circle cx="128" cy="128" r="92" fill="url(#g)" opacity=".22"/>
+      <path d="M75 72h48c40 0 68 24 68 61s-28 61-68 61H75V72zm38 32v58h10c18 0 30-10 30-29s-12-29-30-29h-10z" fill="white"/>
+      <path d="M78 204h100" stroke="#22d3ee" stroke-width="12" stroke-linecap="round"/>
+    </svg>`);
+    return;
+  }
+
+  if (req.url === '/admin/sw.js' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(`self.addEventListener('install', event => self.skipWaiting());\nself.addEventListener('activate', event => event.waitUntil(self.clients.claim()));`);
+    return;
+  }
 
   if (req.url === '/admin' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
