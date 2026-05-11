@@ -259,11 +259,44 @@ async function createFreeSubscription(userId) {
   return Array.isArray(data) ? data[0] || null : null;
 }
 
+async function setActiveSessionForUser(userId, sessionId) {
+  const updated = await supabaseRequest('liveplay_users', {
+    method: 'PATCH',
+    query: `id=eq.${encodeURIComponent(userId)}`,
+    body: {
+      active_session_id: sessionId,
+      active_session_updated_at: new Date().toISOString(),
+    },
+  });
+  return Array.isArray(updated) ? updated[0] || null : null;
+}
+
+async function createActiveSessionTokenForUser(user) {
+  const sessionId = crypto.randomUUID();
+  const updatedUser = await setActiveSessionForUser(user.id, sessionId);
+  const finalUser = updatedUser || user;
+  return {
+    token: signToken({ userId: finalUser.id, email: finalUser.email, sessionId }),
+    sessionId,
+    user: finalUser,
+  };
+}
+
+function isSessionValidForUser(payload, user) {
+  const tokenSessionId = String(payload?.sessionId || '').trim();
+  const activeSessionId = String(user?.active_session_id || '').trim();
+
+  // Tokens antigos sem sessionId deixam de ser válidos depois desta atualização.
+  if (!tokenSessionId || !activeSessionId) return false;
+
+  return tokenSessionId === activeSessionId;
+}
 
 async function getAuthenticatedLivePlayUser(req) {
   const payload = verifyToken(getBearerToken(req));
   if (!payload?.userId) return null;
   const user = await getUserById(payload.userId);
+  if (!user || !isSessionValidForUser(payload, user)) return null;
   return user || null;
 }
 
@@ -786,11 +819,11 @@ async function handleRegister(req, res) {
     const user = Array.isArray(inserted) ? inserted[0] : null;
     if (!user?.id) throw new Error('Falha ao criar usuário.');
     await createFreeSubscription(user.id);
-    const token = signToken({ userId: user.id, email: user.email });
+    const session = await createActiveSessionTokenForUser(user);
     jsonResponse(res, 200, {
       ok: true,
-      token,
-      user: { id: user.id, email: user.email },
+      token: session.token,
+      user: { id: session.user.id, email: session.user.email },
       plan: { plan: 'FREE', status: 'active', expiresAt: null },
     });
   } catch (error) {
@@ -809,11 +842,11 @@ async function handleLogin(req, res) {
     }
     const subscription = await getSubscriptionForUser(user.id);
     const plan = resolvePlanFromSubscription(subscription);
-    const token = signToken({ userId: user.id, email: user.email });
+    const session = await createActiveSessionTokenForUser(user);
     jsonResponse(res, 200, {
       ok: true,
-      token,
-      user: { id: user.id, email: user.email },
+      token: session.token,
+      user: { id: session.user.id, email: session.user.email },
       plan,
     });
   } catch (error) {
@@ -827,6 +860,9 @@ async function handleMePlan(req, res) {
     if (!payload?.userId) return jsonResponse(res, 401, { ok: false, error: 'Token inválido ou expirado.' });
     const user = await getUserById(payload.userId);
     if (!user) return jsonResponse(res, 401, { ok: false, error: 'Usuário não encontrado.' });
+    if (!isSessionValidForUser(payload, user)) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão encerrada porque esta conta entrou em outro dispositivo.' });
+    }
     const subscription = await getSubscriptionForUser(user.id);
     const plan = resolvePlanFromSubscription(subscription);
     jsonResponse(res, 200, {
