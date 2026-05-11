@@ -15,6 +15,17 @@ let lastOverlayPayload = null;
 const uploadRoot = path.join(__dirname, 'video_alerts');
 fs.mkdirSync(uploadRoot, { recursive: true });
 
+function sendJson(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+  });
+
+  res.end(JSON.stringify(data));
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
