@@ -369,62 +369,159 @@ async function handleAdminSetPlan(req, res) {
 }
 
 
+async function activateLivePlayProForUser(userId, email, source = 'mercadopago') {
+  let user = null;
+  const cleanUserId = String(userId || '').trim();
+  const cleanEmail = normalizeEmail(email || '');
+
+  if (cleanUserId) user = await getUserById(cleanUserId);
+  if (!user && cleanEmail) user = await getUserByEmail(cleanEmail);
+  if (!user?.id) return null;
+
+  const expiresAt = new Date();
+  expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+  const current = await getSubscriptionForUser(user.id);
+  const payload = {
+    user_id: user.id,
+    plan: 'PRO',
+    status: 'active',
+    expires_at: expiresAt.toISOString(),
+  };
+
+  let saved = null;
+  if (current?.id) {
+    const updated = await supabaseRequest('liveplay_subscriptions', {
+      method: 'PATCH',
+      query: `id=eq.${encodeURIComponent(current.id)}`,
+      body: payload,
+    });
+    saved = Array.isArray(updated) ? updated[0] || null : null;
+  } else {
+    const inserted = await supabaseRequest('liveplay_subscriptions', {
+      method: 'POST',
+      body: [payload],
+    });
+    saved = Array.isArray(inserted) ? inserted[0] || null : null;
+  }
+
+  console.log('PRO ativado automaticamente:', {
+    email: user.email,
+    userId: user.id,
+    source,
+    expiresAt: payload.expires_at,
+  });
+
+  return { user, subscription: saved, effectivePlan: resolvePlanFromSubscription(saved) };
+}
+
+function getMercadoPagoPaymentIdFromWebhook(body) {
+  const directId = body?.data?.id || body?.id;
+  if (directId && String(directId) !== '123456') return String(directId).trim();
+
+  const resource = String(body?.resource || '').trim();
+  const topic = String(body?.topic || body?.type || '').toLowerCase();
+  if (topic === 'payment' && resource && !resource.startsWith('http')) {
+    return resource;
+  }
+
+  const match = resource.match(/\/payments?\/(\d+)/i);
+  if (match?.[1]) return match[1];
+
+  return '';
+}
+
+async function fetchMercadoPagoPayment(paymentId) {
+  if (!MERCADOPAGO_ACCESS_TOKEN) {
+    throw new Error('Mercado Pago não configurado no Render.');
+  }
+
+  const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(`Mercado Pago payment ${paymentId} HTTP ${response.status}: ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
 async function handleMercadoPagoWebhook(req, res) {
   try {
     const body = await readJsonBody(req);
 
     console.log('Mercado Pago webhook:', JSON.stringify(body));
 
-    const paymentStatus =
-      body?.data?.status ||
-      body?.status ||
-      body?.action;
+    const topic = String(body?.topic || body?.type || '').toLowerCase();
+    const action = String(body?.action || '').toLowerCase();
+    const paymentId = getMercadoPagoPaymentIdFromWebhook(body);
 
-    const payerEmail =
-      body?.payer?.email ||
-      body?.external_reference;
-
-    if (!payerEmail) {
-      return sendJson(res, 200, { ok: true });
+    // O simulador do Mercado Pago envia data.id = 123456.
+    // Esse ID não é um pagamento real, então respondemos 200 só para validar a URL.
+    if (!paymentId) {
+      return sendJson(res, 200, { ok: true, ignored: true, reason: 'no-payment-id', topic, action });
     }
 
-    const normalizedEmail = String(payerEmail).trim().toLowerCase();
-
-    if (
-      String(paymentStatus).includes('approved') ||
-      String(paymentStatus).includes('payment.updated')
-    ) {
-      const userResult = await supabase
-        .from('users')
-        .select('*')
-        .eq('email', normalizedEmail)
-        .single();
-
-      const user = userResult?.data;
-
-      if (user) {
-        const expiresAt = new Date();
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-        await supabase
-          .from('subscriptions')
-          .upsert({
-            user_id: user.id,
-            plan: 'PRO',
-            status: 'active',
-            expires_at: expiresAt.toISOString(),
-          });
-
-        console.log('PRO ativado automaticamente:', normalizedEmail);
-      }
+    let payment = null;
+    try {
+      payment = await fetchMercadoPagoPayment(paymentId);
+    } catch (error) {
+      // Não devolve erro para o Mercado Pago ficar reenviando sem necessidade.
+      console.error('Falha ao consultar pagamento Mercado Pago:', error);
+      return sendJson(res, 200, { ok: true, ignored: true, reason: 'payment-fetch-failed', paymentId });
     }
 
-    return sendJson(res, 200, { ok: true });
+    console.log('Pagamento Mercado Pago consultado:', JSON.stringify({
+      id: payment?.id,
+      status: payment?.status,
+      external_reference: payment?.external_reference,
+      payerEmail: payment?.payer?.email,
+      metadata: payment?.metadata,
+    }));
+
+    if (String(payment?.status || '').toLowerCase() !== 'approved') {
+      return sendJson(res, 200, { ok: true, ignored: true, reason: 'payment-not-approved', status: payment?.status || null });
+    }
+
+    const metadata = payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {};
+    const userId = String(
+      payment?.external_reference ||
+      metadata.liveplay_user_id ||
+      metadata.user_id ||
+      ''
+    ).trim();
+    const email = normalizeEmail(
+      metadata.liveplay_email ||
+      metadata.email ||
+      payment?.payer?.email ||
+      ''
+    );
+
+    const activated = await activateLivePlayProForUser(userId, email, `mercadopago:${paymentId}`);
+    if (!activated) {
+      console.warn('Pagamento aprovado, mas usuário LivePlay não encontrado.', { paymentId, userId, email });
+      return sendJson(res, 200, { ok: true, ignored: true, reason: 'liveplay-user-not-found', paymentId });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      activated: true,
+      user: { id: activated.user.id, email: activated.user.email },
+      plan: activated.effectivePlan,
+    });
   } catch (error) {
     console.error('Erro webhook Mercado Pago:', error);
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'mercadopago_webhook_failed',
+    // Responde 200 para evitar loop infinito de retries do MP em erro transitório.
+    return sendJson(res, 200, {
+      ok: true,
+      ignored: true,
+      reason: 'webhook-exception',
     });
   }
 }
