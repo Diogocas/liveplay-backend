@@ -271,10 +271,12 @@ async function setActiveSessionForUser(userId, sessionId) {
   return Array.isArray(updated) ? updated[0] || null : null;
 }
 
-async function createActiveSessionTokenForUser(user) {
+async function createActiveSessionTokenForUser(user, req) {
   const sessionId = crypto.randomUUID();
+  await markUserDeviceSessionsInactive(user.id);
   const updatedUser = await setActiveSessionForUser(user.id, sessionId);
   const finalUser = updatedUser || user;
+  await saveDeviceSession(finalUser, sessionId, req, 'active');
   return {
     token: signToken({ userId: finalUser.id, email: finalUser.email, sessionId }),
     sessionId,
@@ -292,12 +294,111 @@ function isSessionValidForUser(payload, user) {
   return tokenSessionId === activeSessionId;
 }
 
-async function getAuthenticatedLivePlayUser(req) {
+
+function getClientIp(req) {
+  return String(
+    req.headers['x-forwarded-for'] ||
+    req.headers['cf-connecting-ip'] ||
+    req.socket?.remoteAddress ||
+    ''
+  ).split(',')[0].trim().slice(0, 120);
+}
+
+function getDeviceName(req) {
+  const explicit = String(req.headers['x-liveplay-device-name'] || '').trim();
+  if (explicit) return explicit.slice(0, 160);
+
+  const ua = String(req.headers['user-agent'] || '').trim();
+  if (ua.includes('Windows')) return 'Windows PC';
+  if (ua.includes('Mac')) return 'Mac';
+  if (ua.includes('Linux')) return 'Linux PC';
+  return ua ? ua.slice(0, 160) : 'Dispositivo LivePlay';
+}
+
+async function getDeviceSessionBySessionId(sessionId) {
+  const data = await supabaseRequest('liveplay_device_sessions', {
+    query: `session_id=eq.${encodeURIComponent(sessionId)}&limit=1`,
+  });
+  return Array.isArray(data) ? data[0] || null : null;
+}
+
+async function markUserDeviceSessionsInactive(userId, exceptSessionId = '') {
+  try {
+    const query = exceptSessionId
+      ? `user_id=eq.${encodeURIComponent(userId)}&session_id=neq.${encodeURIComponent(exceptSessionId)}`
+      : `user_id=eq.${encodeURIComponent(userId)}`;
+    await supabaseRequest('liveplay_device_sessions', {
+      method: 'PATCH',
+      query,
+      body: {
+        is_active: false,
+        revoked_at: new Date().toISOString(),
+      },
+      prefer: 'return=minimal',
+    });
+  } catch (error) {
+    console.warn('Não foi possível marcar sessões antigas como inativas:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function saveDeviceSession(user, sessionId, req, status = 'active') {
+  if (!user?.id || !sessionId) return null;
+
+  const now = new Date().toISOString();
+  const record = {
+    user_id: user.id,
+    email: user.email,
+    session_id: sessionId,
+    device_name: getDeviceName(req),
+    user_agent: String(req.headers['user-agent'] || '').slice(0, 500),
+    ip_address: getClientIp(req),
+    status,
+    is_active: status === 'active',
+    last_seen_at: now,
+    updated_at: now,
+    revoked_at: status === 'revoked' ? now : null,
+  };
+
+  const existing = await getDeviceSessionBySessionId(sessionId);
+  if (existing?.id) {
+    const updated = await supabaseRequest('liveplay_device_sessions', {
+      method: 'PATCH',
+      query: `id=eq.${encodeURIComponent(existing.id)}`,
+      body: record,
+    });
+    return Array.isArray(updated) ? updated[0] || null : null;
+  }
+
+  const inserted = await supabaseRequest('liveplay_device_sessions', {
+    method: 'POST',
+    body: [{ ...record, created_at: now }],
+  });
+  return Array.isArray(inserted) ? inserted[0] || null : null;
+}
+
+async function touchCurrentDeviceSession(user, payload, req) {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!user?.id || !sessionId) return;
+  try {
+    await saveDeviceSession(user, sessionId, req, 'active');
+  } catch (error) {
+    console.warn('Não foi possível atualizar sessão do dispositivo:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function getAuthenticatedLivePlayContext(req) {
   const payload = verifyToken(getBearerToken(req));
   if (!payload?.userId) return null;
   const user = await getUserById(payload.userId);
   if (!user || !isSessionValidForUser(payload, user)) return null;
-  return user || null;
+  return { user, payload };
+}
+
+async function getAuthenticatedLivePlayUser(req) {
+  const context = await getAuthenticatedLivePlayContext(req);
+  if (!context?.user) return null;
+  await touchCurrentDeviceSession(context.user, context.payload, req);
+  return context.user;
 }
 
 function sanitizeCloudPayload(payload) {
@@ -819,7 +920,7 @@ async function handleRegister(req, res) {
     const user = Array.isArray(inserted) ? inserted[0] : null;
     if (!user?.id) throw new Error('Falha ao criar usuário.');
     await createFreeSubscription(user.id);
-    const session = await createActiveSessionTokenForUser(user);
+    const session = await createActiveSessionTokenForUser(user, req);
     jsonResponse(res, 200, {
       ok: true,
       token: session.token,
@@ -842,7 +943,7 @@ async function handleLogin(req, res) {
     }
     const subscription = await getSubscriptionForUser(user.id);
     const plan = resolvePlanFromSubscription(subscription);
-    const session = await createActiveSessionTokenForUser(user);
+    const session = await createActiveSessionTokenForUser(user, req);
     jsonResponse(res, 200, {
       ok: true,
       token: session.token,
@@ -863,6 +964,7 @@ async function handleMePlan(req, res) {
     if (!isSessionValidForUser(payload, user)) {
       return jsonResponse(res, 401, { ok: false, error: 'Sessão encerrada porque esta conta entrou em outro dispositivo.' });
     }
+    await touchCurrentDeviceSession(user, payload, req);
     const subscription = await getSubscriptionForUser(user.id);
     const plan = resolvePlanFromSubscription(subscription);
     jsonResponse(res, 200, {
@@ -872,6 +974,78 @@ async function handleMePlan(req, res) {
     });
   } catch (error) {
     jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao consultar plano.' });
+  }
+}
+
+
+async function handleDeviceSessions(req, res) {
+  try {
+    const context = await getAuthenticatedLivePlayContext(req);
+    if (!context?.user) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    await touchCurrentDeviceSession(context.user, context.payload, req);
+
+    const sessions = await supabaseRequest('liveplay_device_sessions', {
+      query: `user_id=eq.${encodeURIComponent(context.user.id)}&order=last_seen_at.desc&limit=20`,
+    });
+
+    const activeSessionId = String(context.user.active_session_id || '').trim();
+    return jsonResponse(res, 200, {
+      ok: true,
+      currentSessionId: activeSessionId,
+      devices: (Array.isArray(sessions) ? sessions : []).map((item) => ({
+        id: item.id,
+        deviceName: item.device_name || 'Dispositivo LivePlay',
+        email: item.email || context.user.email,
+        status: item.status || (item.is_active ? 'active' : 'inactive'),
+        isActive: Boolean(item.is_active) && String(item.session_id || '') === activeSessionId && !item.revoked_at,
+        isCurrent: String(item.session_id || '') === String(context.payload.sessionId || ''),
+        ipAddress: item.ip_address || '',
+        createdAt: item.created_at || null,
+        lastSeenAt: item.last_seen_at || item.updated_at || null,
+        revokedAt: item.revoked_at || null,
+      })),
+    });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao listar dispositivos.' });
+  }
+}
+
+async function handleRevokeAllDevices(req, res) {
+  try {
+    const context = await getAuthenticatedLivePlayContext(req);
+    if (!context?.user) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    const now = new Date().toISOString();
+    await supabaseRequest('liveplay_device_sessions', {
+      method: 'PATCH',
+      query: `user_id=eq.${encodeURIComponent(context.user.id)}`,
+      body: {
+        is_active: false,
+        status: 'revoked',
+        revoked_at: now,
+        updated_at: now,
+      },
+      prefer: 'return=minimal',
+    });
+
+    await supabaseRequest('liveplay_users', {
+      method: 'PATCH',
+      query: `id=eq.${encodeURIComponent(context.user.id)}`,
+      body: {
+        active_session_id: null,
+        active_session_updated_at: now,
+      },
+      prefer: 'return=minimal',
+    });
+
+    return jsonResponse(res, 200, { ok: true, revoked: true });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao revogar sessões.' });
   }
 }
 
@@ -997,6 +1171,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/me/plan' && req.method === 'GET') {
     await handleMePlan(req, res);
+    return;
+  }
+
+  if (req.url === '/devices/sessions' && req.method === 'GET') {
+    await handleDeviceSessions(req, res);
+    return;
+  }
+
+  if (req.url === '/devices/revoke-all' && req.method === 'POST') {
+    await handleRevokeAllDevices(req, res);
     return;
   }
 
