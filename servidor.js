@@ -82,7 +82,8 @@ function safePublicBase(req) {
 // SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, LIVEPLAY_AUTH_SECRET
 const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
-const LIVEPLAY_AUTH_SECRET = String(process.env.LIVEPLAY_AUTH_SECRET || 'dev-change-this-secret');
+const LIVEPLAY_AUTH_SECRET = String(process.env.LIVEPLAY_AUTH_SECRET || process.env.JWT_SECRET || 'dev-change-this-secret');
+const LIVEPLAY_ADMIN_SECRET = String(process.env.LIVEPLAY_ADMIN_SECRET || process.env.ADMIN_SECRET || '');
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 dias
 
 function jsonResponse(res, status, payload) {
@@ -245,6 +246,204 @@ async function createFreeSubscription(userId) {
   return Array.isArray(data) ? data[0] || null : null;
 }
 
+
+function isAdminRequest(req) {
+  const headerSecret = String(req.headers['x-liveplay-admin-secret'] || '').trim();
+  const bearer = getBearerToken(req).trim();
+  const provided = headerSecret || bearer;
+  if (!LIVEPLAY_ADMIN_SECRET || !provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(LIVEPLAY_ADMIN_SECRET);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requireAdmin(req, res) {
+  if (isAdminRequest(req)) return true;
+  jsonResponse(res, 401, { ok: false, error: 'Admin secret inválido ou ausente.' });
+  return false;
+}
+
+function safeLimit(value, fallback = 50) {
+  const num = Math.floor(Number(value || fallback) || fallback);
+  return Math.max(1, Math.min(200, num));
+}
+
+async function getSubscriptionById(id) {
+  const data = await supabaseRequest('liveplay_subscriptions', {
+    query: `id=eq.${encodeURIComponent(id)}&limit=1`,
+  });
+  return Array.isArray(data) ? data[0] || null : null;
+}
+
+async function listAdminUsers(req, res) {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const url = new URL(req.url, 'http://localhost');
+    const search = normalizeEmail(url.searchParams.get('search') || '');
+    const limit = safeLimit(url.searchParams.get('limit'), 50);
+    const queryParts = [`order=created_at.desc`, `limit=${limit}`];
+    if (search) queryParts.unshift(`email=ilike.*${encodeURIComponent(search)}*`);
+    const users = await supabaseRequest('liveplay_users', {
+      query: queryParts.join('&'),
+    });
+    const result = [];
+    for (const user of Array.isArray(users) ? users : []) {
+      const subscription = await getSubscriptionForUser(user.id);
+      result.push({
+        id: user.id,
+        email: user.email,
+        createdAt: user.created_at,
+        subscription,
+        effectivePlan: resolvePlanFromSubscription(subscription),
+      });
+    }
+    jsonResponse(res, 200, { ok: true, users: result });
+  } catch (error) {
+    jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao listar usuários.' });
+  }
+}
+
+async function handleAdminSetPlan(req, res) {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const body = await readJsonBody(req);
+    const email = normalizeEmail(body.email);
+    const userId = String(body.userId || '').trim();
+    const plan = String(body.plan || 'FREE').toUpperCase() === 'PRO' ? 'PRO' : 'FREE';
+    const statusValue = String(body.status || 'active').toLowerCase();
+    const status = ['active', 'inactive', 'expired', 'canceled'].includes(statusValue) ? statusValue : 'active';
+    const expiresAtRaw = body.expiresAt ?? body.expires_at ?? null;
+    const expiresAt = expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null;
+
+    let user = null;
+    if (userId) user = await getUserById(userId);
+    if (!user && email) user = await getUserByEmail(email);
+    if (!user) return jsonResponse(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+
+    const current = await getSubscriptionForUser(user.id);
+    let saved = null;
+    const payload = {
+      user_id: user.id,
+      plan,
+      status,
+      expires_at: expiresAt,
+    };
+
+    if (current?.id) {
+      const updated = await supabaseRequest('liveplay_subscriptions', {
+        method: 'PATCH',
+        query: `id=eq.${encodeURIComponent(current.id)}`,
+        body: payload,
+      });
+      saved = Array.isArray(updated) ? updated[0] || null : null;
+    } else {
+      const inserted = await supabaseRequest('liveplay_subscriptions', {
+        method: 'POST',
+        body: [payload],
+      });
+      saved = Array.isArray(inserted) ? inserted[0] || null : null;
+    }
+
+    jsonResponse(res, 200, {
+      ok: true,
+      user: { id: user.id, email: user.email },
+      subscription: saved,
+      effectivePlan: resolvePlanFromSubscription(saved),
+    });
+  } catch (error) {
+    jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao atualizar plano.' });
+  }
+}
+
+function adminHtml() {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LivePlay Admin</title>
+<style>
+  body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#080d1a;color:#e5e7eb;margin:0;padding:28px}
+  .wrap{max-width:980px;margin:0 auto;display:grid;gap:18px}
+  .card{background:rgba(15,23,42,.92);border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.28)}
+  h1{margin:0 0 6px;font-size:28px}.muted{color:#94a3b8;font-size:14px}label{display:grid;gap:6px;font-size:13px;color:#cbd5e1;font-weight:700}
+  input,select,button{border-radius:12px;border:1px solid rgba(148,163,184,.25);background:#0b1223;color:#fff;padding:12px;font-size:14px}
+  button{cursor:pointer;background:linear-gradient(135deg,#6d5dfc,#22d3ee);border:0;font-weight:900}.secondary{background:#111827;border:1px solid rgba(148,163,184,.22)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.users{display:grid;gap:10px}.user{padding:14px;border-radius:14px;background:rgba(255,255,255,.04);display:grid;gap:8px;border:1px solid rgba(255,255,255,.06)}
+  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:900;background:#1f2937}.pro{background:#312e81;color:#ddd6fe}.free{background:#064e3b;color:#bbf7d0}.danger{color:#fca5a5}.ok{color:#86efac}
+  pre{white-space:pre-wrap;word-break:break-word;background:#020617;border-radius:12px;padding:12px;color:#cbd5e1}
+</style>
+</head>
+<body><div class="wrap">
+  <div class="card"><h1>LivePlay Admin</h1><div class="muted">Gerencie planos sem abrir o Supabase. Guarde o ADMIN_SECRET com segurança.</div></div>
+  <div class="card grid">
+    <label>Admin secret<input id="secret" type="password" placeholder="LIVEPLAY_ADMIN_SECRET" /></label>
+    <label>Buscar email<input id="search" placeholder="email do cliente" /></label>
+    <button onclick="loadUsers()">Buscar usuários</button><button class="secondary" onclick="clearLog()">Limpar log</button>
+  </div>
+  <div class="card grid">
+    <label>Email do usuário<input id="email" placeholder="cliente@email.com" /></label>
+    <label>Plano<select id="plan"><option value="FREE">FREE</option><option value="PRO">PRO</option></select></label>
+    <label>Status<select id="status"><option value="active">active</option><option value="inactive">inactive</option><option value="expired">expired</option><option value="canceled">canceled</option></select></label>
+    <label>Expira em (opcional)<input id="expiresAt" type="datetime-local" /></label>
+    <button onclick="setPlan()">Salvar plano</button><button class="secondary" onclick="setFree()">Voltar para FREE</button>
+  </div>
+  <div class="card"><div class="users" id="users"></div></div>
+  <div class="card"><pre id="log">Pronto.</pre></div>
+</div>
+<script>
+const logEl = document.getElementById('log');
+function secret(){ return document.getElementById('secret').value.trim(); }
+function log(v){ logEl.textContent = typeof v === 'string' ? v : JSON.stringify(v,null,2); }
+function clearLog(){ log('Pronto.'); }
+async function api(path, options={}){
+  const headers = { 'Content-Type':'application/json', 'x-liveplay-admin-secret': secret(), ...(options.headers||{}) };
+  const res = await fetch(path, { ...options, headers });
+  const data = await res.json().catch(()=>null);
+  if(!res.ok || !data?.ok) throw new Error(data?.error || 'Falha HTTP '+res.status);
+  return data;
+}
+function fillEmail(email){ document.getElementById('email').value=email; }
+async function loadUsers(){
+  try{
+    const q = encodeURIComponent(document.getElementById('search').value.trim());
+    const data = await api('/admin/users?limit=50&search='+q);
+    const box = document.getElementById('users');
+    box.innerHTML = '';
+    for(const u of data.users){
+      const plan = u.effectivePlan?.plan || 'FREE';
+      const sub = u.subscription || {};
+      const div = document.createElement('div');
+      div.className='user';
+      div.innerHTML = '<div><b>'+u.email+'</b> <span class="pill '+(plan==='PRO'?'pro':'free')+'">'+plan+'</span></div>'+
+        '<div class="muted">status: '+(sub.status||'-')+' · expira: '+(sub.expires_at||'sem expiração')+'</div>'+
+        '<div class="row"><button class="secondary" onclick="fillEmail(\''+u.email.replace(/'/g,'')+'\')">Selecionar</button></div>';
+      box.appendChild(div);
+    }
+    log(data);
+  }catch(e){ log('Erro: '+e.message); }
+}
+async function setPlan(){
+  try{
+    const body = {
+      email: document.getElementById('email').value.trim(),
+      plan: document.getElementById('plan').value,
+      status: document.getElementById('status').value,
+      expiresAt: document.getElementById('expiresAt').value || null,
+    };
+    const data = await api('/admin/set-plan',{method:'POST',body:JSON.stringify(body)});
+    log(data); await loadUsers();
+  }catch(e){ log('Erro: '+e.message); }
+}
+async function setFree(){
+  document.getElementById('plan').value='FREE';
+  document.getElementById('status').value='active';
+  document.getElementById('expiresAt').value='';
+  await setPlan();
+}
+</script></body></html>`;
+}
+
 async function handleRegister(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -328,7 +527,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('LivePlay Backend Online 🚀\nAuth: /auth/register, /auth/login, /me/plan');
+    res.end('LivePlay Backend Online 🚀\nAuth: /auth/register, /auth/login, /me/plan | Admin: /admin');
     return;
   }
 
@@ -344,6 +543,23 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/me/plan' && req.method === 'GET') {
     await handleMePlan(req, res);
+    return;
+  }
+
+
+  if (req.url === '/admin' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(adminHtml());
+    return;
+  }
+
+  if (req.url.startsWith('/admin/users') && req.method === 'GET') {
+    await listAdminUsers(req, res);
+    return;
+  }
+
+  if (req.url === '/admin/set-plan' && req.method === 'POST') {
+    await handleAdminSetPlan(req, res);
     return;
   }
 
