@@ -1050,6 +1050,75 @@ async function handleRevokeAllDevices(req, res) {
 }
 
 
+async function handleRevokeDeviceSession(req, res) {
+  try {
+    const context = await getAuthenticatedLivePlayContext(req);
+    if (!context?.user) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    const body = await readJsonBody(req);
+    const deviceId = String(body.deviceId || body.id || '').trim();
+    const sessionId = String(body.sessionId || '').trim();
+
+    if (!deviceId && !sessionId) {
+      return jsonResponse(res, 400, { ok: false, error: 'Dispositivo inválido.' });
+    }
+
+    const query = deviceId
+      ? `id=eq.${encodeURIComponent(deviceId)}&user_id=eq.${encodeURIComponent(context.user.id)}&limit=1`
+      : `session_id=eq.${encodeURIComponent(sessionId)}&user_id=eq.${encodeURIComponent(context.user.id)}&limit=1`;
+
+    const found = await supabaseRequest('liveplay_device_sessions', { query });
+    const device = Array.isArray(found) ? found[0] || null : null;
+
+    if (!device?.id) {
+      return jsonResponse(res, 404, { ok: false, error: 'Dispositivo não encontrado.' });
+    }
+
+    const now = new Date().toISOString();
+    await supabaseRequest('liveplay_device_sessions', {
+      method: 'PATCH',
+      query: `id=eq.${encodeURIComponent(device.id)}&user_id=eq.${encodeURIComponent(context.user.id)}`,
+      body: {
+        is_active: false,
+        status: 'revoked',
+        revoked_at: now,
+        updated_at: now,
+      },
+      prefer: 'return=minimal',
+    });
+
+    const revokedSessionId = String(device.session_id || '').trim();
+    const currentTokenSessionId = String(context.payload?.sessionId || '').trim();
+    const activeSessionId = String(context.user?.active_session_id || '').trim();
+    const revokedCurrent = Boolean(revokedSessionId && revokedSessionId === currentTokenSessionId);
+    const revokedActive = Boolean(revokedSessionId && revokedSessionId === activeSessionId);
+
+    if (revokedActive) {
+      await supabaseRequest('liveplay_users', {
+        method: 'PATCH',
+        query: `id=eq.${encodeURIComponent(context.user.id)}`,
+        body: {
+          active_session_id: null,
+          active_session_updated_at: now,
+        },
+        prefer: 'return=minimal',
+      });
+    }
+
+    return jsonResponse(res, 200, {
+      ok: true,
+      revoked: true,
+      revokedCurrent,
+      deviceId: device.id,
+    });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao revogar dispositivo.' });
+  }
+}
+
+
 async function handleCreateCheckout(req, res) {
   try {
     if (!MERCADOPAGO_ACCESS_TOKEN) {
@@ -1181,6 +1250,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/devices/revoke-all' && req.method === 'POST') {
     await handleRevokeAllDevices(req, res);
+    return;
+  }
+
+  if (req.url === '/devices/revoke-session' && req.method === 'POST') {
+    await handleRevokeDeviceSession(req, res);
     return;
   }
 
