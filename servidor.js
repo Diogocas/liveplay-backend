@@ -97,7 +97,8 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
 const LIVEPLAY_AUTH_SECRET = String(process.env.LIVEPLAY_AUTH_SECRET || process.env.JWT_SECRET || 'dev-change-this-secret');
 const LIVEPLAY_ADMIN_SECRET = String(process.env.LIVEPLAY_ADMIN_SECRET || process.env.ADMIN_SECRET || '');
-const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 dias
+const ACCESS_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 1 dia
+const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 dias
 
 function jsonResponse(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -118,12 +119,12 @@ function base64UrlDecode(input) {
   return Buffer.from(padded, 'base64').toString('utf8');
 }
 
-function signToken(payload) {
+function signToken(payload, ttlMs = ACCESS_TOKEN_TTL_MS) {
   const header = { alg: 'HS256', typ: 'JWT' };
   const body = {
     ...payload,
     iat: Date.now(),
-    exp: Date.now() + TOKEN_TTL_MS,
+    exp: Date.now() + ttlMs,
   };
   const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(body))}`;
   const signature = crypto
@@ -259,6 +260,22 @@ async function createFreeSubscription(userId) {
   return Array.isArray(data) ? data[0] || null : null;
 }
 
+function createRefreshToken() {
+  return crypto.randomBytes(48).toString('base64url');
+}
+
+function hashRefreshToken(refreshToken) {
+  return crypto
+    .createHash('sha256')
+    .update(String(refreshToken || ''))
+    .digest('hex');
+}
+
+function refreshExpiresAtFromNow() {
+  return new Date(Date.now() + REFRESH_TOKEN_TTL_MS).toISOString();
+}
+
+
 async function setActiveSessionForUser(userId, sessionId) {
   const updated = await supabaseRequest('liveplay_users', {
     method: 'PATCH',
@@ -273,12 +290,22 @@ async function setActiveSessionForUser(userId, sessionId) {
 
 async function createActiveSessionTokenForUser(user, req) {
   const sessionId = crypto.randomUUID();
+  const refreshToken = createRefreshToken();
+  const refreshTokenHash = hashRefreshToken(refreshToken);
+  const refreshExpiresAt = refreshExpiresAtFromNow();
+
   await markUserDeviceSessionsInactive(user.id);
   const updatedUser = await setActiveSessionForUser(user.id, sessionId);
   const finalUser = updatedUser || user;
-  await saveDeviceSession(finalUser, sessionId, req, 'active');
+  await saveDeviceSession(finalUser, sessionId, req, 'active', {
+    refresh_token_hash: refreshTokenHash,
+    refresh_expires_at: refreshExpiresAt,
+  });
+
   return {
     token: signToken({ userId: finalUser.id, email: finalUser.email, sessionId }),
+    refreshToken,
+    refreshExpiresAt,
     sessionId,
     user: finalUser,
   };
@@ -341,7 +368,7 @@ async function markUserDeviceSessionsInactive(userId, exceptSessionId = '') {
   }
 }
 
-async function saveDeviceSession(user, sessionId, req, status = 'active') {
+async function saveDeviceSession(user, sessionId, req, status = 'active', extra = {}) {
   if (!user?.id || !sessionId) return null;
 
   const now = new Date().toISOString();
@@ -357,6 +384,7 @@ async function saveDeviceSession(user, sessionId, req, status = 'active') {
     last_seen_at: now,
     updated_at: now,
     revoked_at: status === 'revoked' ? now : null,
+    ...extra,
   };
 
   const existing = await getDeviceSessionBySessionId(sessionId);
@@ -924,6 +952,9 @@ async function handleRegister(req, res) {
     jsonResponse(res, 200, {
       ok: true,
       token: session.token,
+      refreshToken: session.refreshToken,
+      refreshExpiresAt: session.refreshExpiresAt,
+      sessionId: session.sessionId,
       user: { id: session.user.id, email: session.user.email },
       plan: { plan: 'FREE', status: 'active', expiresAt: null },
     });
@@ -947,6 +978,9 @@ async function handleLogin(req, res) {
     jsonResponse(res, 200, {
       ok: true,
       token: session.token,
+      refreshToken: session.refreshToken,
+      refreshExpiresAt: session.refreshExpiresAt,
+      sessionId: session.sessionId,
       user: { id: session.user.id, email: session.user.email },
       plan,
     });
@@ -974,6 +1008,61 @@ async function handleMePlan(req, res) {
     });
   } catch (error) {
     jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao consultar plano.' });
+  }
+}
+
+
+async function handleAuthRefresh(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const refreshToken = String(body.refreshToken || '').trim();
+    if (!refreshToken) {
+      return jsonResponse(res, 401, { ok: false, error: 'Refresh token ausente.' });
+    }
+
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    const sessions = await supabaseRequest('liveplay_device_sessions', {
+      query: `refresh_token_hash=eq.${encodeURIComponent(refreshTokenHash)}&is_active=eq.true&limit=1`,
+    });
+    const deviceSession = Array.isArray(sessions) ? sessions[0] || null : null;
+    if (!deviceSession?.user_id || !deviceSession?.session_id) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão inválida ou expirada.' });
+    }
+
+    const refreshExpiresAt = deviceSession.refresh_expires_at ? new Date(deviceSession.refresh_expires_at).getTime() : 0;
+    if (!refreshExpiresAt || refreshExpiresAt <= Date.now()) {
+      await supabaseRequest('liveplay_device_sessions', {
+        method: 'PATCH',
+        query: `id=eq.${encodeURIComponent(deviceSession.id)}`,
+        body: { is_active: false, status: 'expired', revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        prefer: 'return=minimal',
+      });
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão expirada. Entre novamente.' });
+    }
+
+    const user = await getUserById(deviceSession.user_id);
+    if (!user || String(user.active_session_id || '') !== String(deviceSession.session_id || '')) {
+      return jsonResponse(res, 401, { ok: false, error: 'Sessão encerrada porque esta conta entrou em outro dispositivo.' });
+    }
+
+    await saveDeviceSession(user, deviceSession.session_id, req, 'active', {
+      refresh_token_hash: refreshTokenHash,
+      refresh_expires_at: deviceSession.refresh_expires_at,
+    });
+
+    const subscription = await getSubscriptionForUser(user.id);
+    const plan = resolvePlanFromSubscription(subscription);
+    return jsonResponse(res, 200, {
+      ok: true,
+      token: signToken({ userId: user.id, email: user.email, sessionId: deviceSession.session_id }),
+      refreshToken,
+      refreshExpiresAt: deviceSession.refresh_expires_at,
+      sessionId: deviceSession.session_id,
+      user: { id: user.id, email: user.email },
+      plan,
+    });
+  } catch (error) {
+    return jsonResponse(res, 500, { ok: false, error: error instanceof Error ? error.message : 'Falha ao renovar sessão.' });
   }
 }
 
@@ -1235,6 +1324,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/auth/login' && req.method === 'POST') {
     await handleLogin(req, res);
+    return;
+  }
+
+  if (req.url === '/auth/refresh' && req.method === 'POST') {
+    await handleAuthRefresh(req, res);
     return;
   }
 
