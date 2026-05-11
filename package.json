@@ -5,5 +5,7 @@
   "scripts": {
     "start": "node servidor.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "mercadopago": "^2.12.0"
+  }
 }
