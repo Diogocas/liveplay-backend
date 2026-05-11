@@ -379,68 +379,108 @@ function adminHtml() {
   <div class="card grid">
     <label>Admin secret<input id="secret" type="password" placeholder="LIVEPLAY_ADMIN_SECRET" /></label>
     <label>Buscar email<input id="search" placeholder="email do cliente" /></label>
-    <button onclick="loadUsers()">Buscar usuários</button><button class="secondary" onclick="clearLog()">Limpar log</button>
+    <button id="btnLoadUsers" type="button">Buscar usuários</button><button id="btnClearLog" class="secondary" type="button">Limpar log</button>
   </div>
   <div class="card grid">
     <label>Email do usuário<input id="email" placeholder="cliente@email.com" /></label>
     <label>Plano<select id="plan"><option value="FREE">FREE</option><option value="PRO">PRO</option></select></label>
     <label>Status<select id="status"><option value="active">active</option><option value="inactive">inactive</option><option value="expired">expired</option><option value="canceled">canceled</option></select></label>
     <label>Expira em (opcional)<input id="expiresAt" type="datetime-local" /></label>
-    <button onclick="setPlan()">Salvar plano</button><button class="secondary" onclick="setFree()">Voltar para FREE</button>
+    <button id="btnSetPlan" type="button">Salvar plano</button><button id="btnSetFree" class="secondary" type="button">Voltar para FREE</button>
   </div>
   <div class="card"><div class="users" id="users"></div></div>
   <div class="card"><pre id="log">Pronto.</pre></div>
 </div>
 <script>
-const logEl = document.getElementById('log');
-function secret(){ return document.getElementById('secret').value.trim(); }
-function log(v){ logEl.textContent = typeof v === 'string' ? v : JSON.stringify(v,null,2); }
-function clearLog(){ log('Pronto.'); }
-async function api(path, options={}){
-  const headers = { 'Content-Type':'application/json', 'x-liveplay-admin-secret': secret(), ...(options.headers||{}) };
-  const res = await fetch(path, { ...options, headers });
-  const data = await res.json().catch(()=>null);
-  if(!res.ok || !data?.ok) throw new Error(data?.error || 'Falha HTTP '+res.status);
-  return data;
-}
-function fillEmail(email){ document.getElementById('email').value=email; }
-async function loadUsers(){
-  try{
-    const q = encodeURIComponent(document.getElementById('search').value.trim());
-    const data = await api('/admin/users?limit=50&search='+q);
-    const box = document.getElementById('users');
-    box.innerHTML = '';
-    for(const u of data.users){
-      const plan = u.effectivePlan?.plan || 'FREE';
-      const sub = u.subscription || {};
-      const div = document.createElement('div');
-      div.className='user';
-      div.innerHTML = '<div><b>'+u.email+'</b> <span class="pill '+(plan==='PRO'?'pro':'free')+'">'+plan+'</span></div>'+
-        '<div class="muted">status: '+(sub.status||'-')+' · expira: '+(sub.expires_at||'sem expiração')+'</div>'+
-        '<div class="row"><button class="secondary" onclick="fillEmail(\''+u.email.replace(/'/g,'')+'\')">Selecionar</button></div>';
-      box.appendChild(div);
+(function(){
+  const logEl = document.getElementById('log');
+  function secret(){ return document.getElementById('secret').value.trim(); }
+  function log(v){ logEl.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); }
+  function clearLog(){ log('Pronto.'); }
+  async function api(path, options){
+    options = options || {};
+    const headers = Object.assign({
+      'Content-Type': 'application/json',
+      'x-liveplay-admin-secret': secret()
+    }, options.headers || {});
+    const res = await fetch(path, Object.assign({}, options, { headers }));
+    const data = await res.json().catch(function(){ return null; });
+    if(!res.ok || !data || data.ok !== true){
+      throw new Error((data && data.error) ? data.error : ('Falha HTTP ' + res.status));
     }
-    log(data);
-  }catch(e){ log('Erro: '+e.message); }
-}
-async function setPlan(){
-  try{
-    const body = {
-      email: document.getElementById('email').value.trim(),
-      plan: document.getElementById('plan').value,
-      status: document.getElementById('status').value,
-      expiresAt: document.getElementById('expiresAt').value || null,
-    };
-    const data = await api('/admin/set-plan',{method:'POST',body:JSON.stringify(body)});
-    log(data); await loadUsers();
-  }catch(e){ log('Erro: '+e.message); }
-}
-async function setFree(){
-  document.getElementById('plan').value='FREE';
-  document.getElementById('status').value='active';
-  document.getElementById('expiresAt').value='';
-  await setPlan();
-}
+    return data;
+  }
+  function fillEmail(email){
+    document.getElementById('email').value = email || '';
+  }
+  async function loadUsers(){
+    try{
+      const q = encodeURIComponent(document.getElementById('search').value.trim());
+      const data = await api('/admin/users?limit=50&search=' + q);
+      const box = document.getElementById('users');
+      box.innerHTML = '';
+      if(!data.users || data.users.length === 0){
+        box.innerHTML = '<div class="muted">Nenhum usuário encontrado.</div>';
+      }
+      (data.users || []).forEach(function(u){
+        const plan = (u.effectivePlan && u.effectivePlan.plan) || 'FREE';
+        const sub = u.subscription || {};
+        const div = document.createElement('div');
+        div.className = 'user';
+        const header = document.createElement('div');
+        header.innerHTML = '<b></b> <span class="pill"></span>';
+        header.querySelector('b').textContent = u.email || '';
+        const pill = header.querySelector('.pill');
+        pill.textContent = plan;
+        pill.classList.add(plan === 'PRO' ? 'pro' : 'free');
+        const meta = document.createElement('div');
+        meta.className = 'muted';
+        meta.textContent = 'status: ' + (sub.status || '-') + ' · expira: ' + (sub.expires_at || 'sem expiração');
+        const row = document.createElement('div');
+        row.className = 'row';
+        const btn = document.createElement('button');
+        btn.className = 'secondary';
+        btn.type = 'button';
+        btn.textContent = 'Selecionar';
+        btn.addEventListener('click', function(){
+          fillEmail(u.email || '');
+          document.getElementById('plan').value = plan === 'PRO' ? 'PRO' : 'FREE';
+          document.getElementById('status').value = sub.status || 'active';
+          document.getElementById('expiresAt').value = sub.expires_at ? String(sub.expires_at).slice(0,16) : '';
+        });
+        row.appendChild(btn);
+        div.appendChild(header);
+        div.appendChild(meta);
+        div.appendChild(row);
+        box.appendChild(div);
+      });
+      log(data);
+    }catch(e){ log('Erro: ' + e.message); }
+  }
+  async function setPlan(){
+    try{
+      const body = {
+        email: document.getElementById('email').value.trim(),
+        plan: document.getElementById('plan').value,
+        status: document.getElementById('status').value,
+        expiresAt: document.getElementById('expiresAt').value || null
+      };
+      const data = await api('/admin/set-plan', { method: 'POST', body: JSON.stringify(body) });
+      log(data);
+      await loadUsers();
+    }catch(e){ log('Erro: ' + e.message); }
+  }
+  async function setFree(){
+    document.getElementById('plan').value = 'FREE';
+    document.getElementById('status').value = 'active';
+    document.getElementById('expiresAt').value = '';
+    await setPlan();
+  }
+  document.getElementById('btnLoadUsers').addEventListener('click', loadUsers);
+  document.getElementById('btnClearLog').addEventListener('click', clearLog);
+  document.getElementById('btnSetPlan').addEventListener('click', setPlan);
+  document.getElementById('btnSetFree').addEventListener('click', setFree);
+})();
 </script></body></html>`;
 }
 
