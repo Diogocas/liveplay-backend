@@ -5,6 +5,8 @@ const crypto = require('crypto');
 
 const PORT = process.env.PORT || 10000;
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://liveplay-backend.onrender.com';
+const MERCADOPAGO_ACCESS_TOKEN = String(process.env.MERCADOPAGO_ACCESS_TOKEN || '').trim();
+const LIVEPLAY_PRO_PRICE = Number(String(process.env.LIVEPLAY_PRO_PRICE || '50.00').replace(',', '.')) || 50;
 
 let overlayClients = [];
 let videoClients = [];
@@ -558,6 +560,96 @@ async function handleMePlan(req, res) {
   }
 }
 
+
+async function handleCreateCheckout(req, res) {
+  try {
+    if (!MERCADOPAGO_ACCESS_TOKEN) {
+      return jsonResponse(res, 500, {
+        ok: false,
+        error: 'Mercado Pago não configurado no Render.',
+      });
+    }
+
+    const body = await readJsonBody(req);
+    const email = normalizeEmail(body.email);
+
+    if (!validateEmail(email)) {
+      return jsonResponse(res, 400, {
+        ok: false,
+        error: 'Email inválido ou ausente.',
+      });
+    }
+
+    const user = await getUserByEmail(email);
+    if (!user) {
+      return jsonResponse(res, 404, {
+        ok: false,
+        error: 'Conta LivePlay não encontrada para este email.',
+      });
+    }
+
+    const baseUrl = PUBLIC_BASE_URL.replace(/\/$/, '');
+    const preferencePayload = {
+      items: [
+        {
+          id: 'liveplay-pro-monthly',
+          title: 'LivePlay PRO',
+          description: 'Licença LivePlay PRO - 30 dias',
+          quantity: 1,
+          currency_id: 'BRL',
+          unit_price: LIVEPLAY_PRO_PRICE,
+        },
+      ],
+      payer: { email },
+      external_reference: user.id,
+      metadata: {
+        liveplay_user_id: user.id,
+        liveplay_email: email,
+        product: 'liveplay-pro',
+      },
+      notification_url: `${baseUrl}/payments/webhook`,
+      back_urls: {
+        success: `${baseUrl}/payment-success`,
+        failure: `${baseUrl}/payment-failure`,
+        pending: `${baseUrl}/payment-pending`,
+      },
+      auto_return: 'approved',
+    };
+
+    const response = await fetch('https://api.mercadopago.com/checkout/preferences', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(preferencePayload),
+    });
+
+    const mpData = await response.json().catch(() => null);
+    if (!response.ok || !mpData?.init_point) {
+      return jsonResponse(res, 500, {
+        ok: false,
+        error: 'Falha ao criar checkout no Mercado Pago.',
+        details: mpData,
+      });
+    }
+
+    return jsonResponse(res, 200, {
+      ok: true,
+      checkoutUrl: mpData.init_point,
+      sandboxCheckoutUrl: mpData.sandbox_init_point || null,
+      preferenceId: mpData.id || null,
+      price: LIVEPLAY_PRO_PRICE,
+    });
+  } catch (error) {
+    console.error('Erro ao criar checkout Mercado Pago:', error);
+    return jsonResponse(res, 500, {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Falha ao criar checkout.',
+    });
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -587,6 +679,29 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/me/plan' && req.method === 'GET') {
     await handleMePlan(req, res);
+    return;
+  }
+
+  if (req.url === '/payments/create-checkout' && req.method === 'POST') {
+    await handleCreateCheckout(req, res);
+    return;
+  }
+
+  if (req.url === '/payment-success' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h1>Pagamento aprovado</h1><p>Volte ao LivePlay e clique em Atualizar plano.</p>');
+    return;
+  }
+
+  if (req.url === '/payment-pending' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h1>Pagamento pendente</h1><p>Assim que o Mercado Pago aprovar, o PRO será liberado.</p>');
+    return;
+  }
+
+  if (req.url === '/payment-failure' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h1>Pagamento não concluído</h1><p>Tente novamente pelo LivePlay.</p>');
     return;
   }
 
