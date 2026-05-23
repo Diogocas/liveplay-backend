@@ -812,129 +812,125 @@ function adminHtml() {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>LivePlay Admin</title>
 <link rel="manifest" href="/admin/manifest.json" />
-<meta name="theme-color" content="#080d1a" />
+<meta name="theme-color" content="#070b18" />
 <link rel="icon" href="/admin/icon.svg" type="image/svg+xml" />
 <style>
-  body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#080d1a;color:#e5e7eb;margin:0;padding:28px}
-  .wrap{max-width:980px;margin:0 auto;display:grid;gap:18px}
-  .card{background:rgba(15,23,42,.92);border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.28)}
-  h1{margin:0 0 6px;font-size:28px}.muted{color:#94a3b8;font-size:14px}label{display:grid;gap:6px;font-size:13px;color:#cbd5e1;font-weight:700}
-  input,select,button{border-radius:12px;border:1px solid rgba(148,163,184,.25);background:#0b1223;color:#fff;padding:12px;font-size:14px}
-  button{cursor:pointer;background:linear-gradient(135deg,#6d5dfc,#22d3ee);border:0;font-weight:900}.secondary{background:#111827;border:1px solid rgba(148,163,184,.22)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.users{display:grid;gap:10px}.user{padding:14px;border-radius:14px;background:rgba(255,255,255,.04);display:grid;gap:8px;border:1px solid rgba(255,255,255,.06)}
-  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:900;background:#1f2937}.pro{background:#312e81;color:#ddd6fe}.free{background:#064e3b;color:#bbf7d0}.danger{color:#fca5a5}.ok{color:#86efac}
-  pre{white-space:pre-wrap;word-break:break-word;background:#020617;border-radius:12px;padding:12px;color:#cbd5e1}
+  :root{color-scheme:dark;--bg:#070b18;--panel:rgba(15,23,42,.78);--panel2:rgba(9,14,28,.94);--line:rgba(148,163,184,.16);--muted:#93a4bd;--text:#eef4ff;--blue:#22d3ee;--purple:#7c5cff;--green:#22c55e;--red:#fb7185;--amber:#facc15}
+  *{box-sizing:border-box}body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at 12% 0%,rgba(124,92,255,.24),transparent 32%),radial-gradient(circle at 90% 8%,rgba(34,211,238,.18),transparent 28%),linear-gradient(180deg,#070b18,#050816 55%,#03050d);color:var(--text);margin:0;min-height:100vh;padding:28px}button,input,select{font:inherit}.wrap{max-width:1180px;margin:0 auto;display:grid;gap:18px}.hero{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center}.brand{display:flex;gap:14px;align-items:center}.logo{width:54px;height:54px;border-radius:18px;background:linear-gradient(135deg,var(--purple),var(--blue));display:grid;place-items:center;font-size:25px;font-weight:1000;box-shadow:0 0 34px rgba(124,92,255,.35)}.card{background:linear-gradient(180deg,rgba(15,23,42,.86),rgba(11,18,35,.78));border:1px solid var(--line);border-radius:22px;padding:20px;box-shadow:0 22px 70px rgba(0,0,0,.30);backdrop-filter:blur(16px)}h1{margin:0;font-size:31px;letter-spacing:-.04em}.muted{color:var(--muted);font-size:14px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field{display:grid;gap:7px;font-size:12px;color:#cbd5e1;font-weight:800;text-transform:uppercase;letter-spacing:.06em}input,select{width:100%;border-radius:14px;border:1px solid rgba(148,163,184,.24);background:#081020;color:#fff;padding:12px 13px;font-size:14px;outline:none}input:focus,select:focus{border-color:rgba(34,211,238,.55);box-shadow:0 0 0 3px rgba(34,211,238,.10)}button{cursor:pointer;border-radius:14px;border:0;background:linear-gradient(135deg,var(--purple),var(--blue));color:#fff;padding:12px 15px;font-weight:950;box-shadow:0 12px 26px rgba(34,211,238,.12)}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:#101827;border:1px solid rgba(148,163,184,.22);box-shadow:none}.dangerBtn{background:linear-gradient(135deg,#7f1d1d,var(--red))}.okBtn{background:linear-gradient(135deg,#065f46,var(--green))}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.stat{padding:16px;border-radius:18px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07)}.stat span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-weight:900}.stat b{display:block;margin-top:8px;font-size:28px}.users{display:grid;gap:10px;max-height:540px;overflow:auto;padding-right:4px}.user{padding:15px;border-radius:17px;background:rgba(255,255,255,.045);display:grid;gap:10px;border:1px solid rgba(255,255,255,.07)}.userTop{display:flex;justify-content:space-between;gap:12px;align-items:center}.email{font-weight:950;word-break:break-all}.pill{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:950;background:#1f2937}.pro{background:rgba(124,58,237,.25);color:#ddd6fe;border:1px solid rgba(167,139,250,.3)}.free{background:rgba(6,78,59,.35);color:#bbf7d0;border:1px solid rgba(52,211,153,.25)}.expired{background:rgba(127,29,29,.35);color:#fecaca;border:1px solid rgba(248,113,113,.25)}.status{display:flex;gap:8px;flex-wrap:wrap}.toolbar{display:grid;grid-template-columns:1.1fr .8fr auto auto;gap:12px;align-items:end}.remember{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06);color:#dbeafe;font-size:13px;font-weight:800}.remember input{width:auto}pre{white-space:pre-wrap;word-break:break-word;background:#020617;border:1px solid rgba(148,163,184,.13);border-radius:16px;padding:14px;color:#cbd5e1;max-height:260px;overflow:auto}.toast{position:fixed;right:22px;bottom:22px;background:#07111f;border:1px solid rgba(34,211,238,.22);border-radius:16px;padding:13px 15px;box-shadow:0 20px 60px rgba(0,0,0,.45);display:none;z-index:20}.toast.show{display:block}.small{font-size:12px}.spacer{flex:1}@media(max-width:860px){body{padding:16px}.hero,.toolbar,.grid,.grid2,.stats{grid-template-columns:1fr}.card{padding:16px}}
 </style>
 </head>
-<body><div class="wrap">
-  <div class="card"><h1>LivePlay Admin</h1><div class="muted">Gerencie planos sem abrir o Supabase. Guarde o ADMIN_SECRET com segurança.</div></div>
-  <div class="card grid">
-    <label>Admin secret<input id="secret" type="password" placeholder="LIVEPLAY_ADMIN_SECRET" /></label>
-    <label>Buscar email<input id="search" placeholder="email do cliente" /></label>
-    <button id="btnLoadUsers" type="button">Buscar usuários</button><button id="btnClearLog" class="secondary" type="button">Limpar log</button>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="brand"><div class="logo">LP</div><div><h1>LivePlay Admin</h1><div class="muted">Painel para gerenciar usuários, planos e assinaturas. O segredo pode ficar salvo somente neste navegador.</div></div></div>
+    <div class="row"><span class="pill pro">Backend online</span><span class="pill">PRO R$ ${LIVEPLAY_PRO_PRICE.toFixed(2).replace('.', ',')}</span></div>
   </div>
-  <div class="card grid">
-    <label>Email do usuário<input id="email" placeholder="cliente@email.com" /></label>
-    <label>Plano<select id="plan"><option value="FREE">FREE</option><option value="PRO">PRO</option></select></label>
-    <label>Status<select id="status"><option value="active">active</option><option value="inactive">inactive</option><option value="expired">expired</option><option value="canceled">canceled</option></select></label>
-    <label>Expira em (opcional)<input id="expiresAt" type="datetime-local" /></label>
-    <button id="btnSetPlan" type="button">Salvar plano</button><button id="btnSetFree" class="secondary" type="button">Voltar para FREE</button>
+
+  <div class="stats">
+    <div class="stat"><span>Usuários</span><b id="statTotal">0</b></div>
+    <div class="stat"><span>PRO ativos</span><b id="statPro">0</b></div>
+    <div class="stat"><span>FREE</span><b id="statFree">0</b></div>
+    <div class="stat"><span>Vencidos</span><b id="statExpired">0</b></div>
   </div>
-  <div class="card"><div class="users" id="users"></div></div>
-  <div class="card"><pre id="log">Pronto.</pre></div>
+
+  <div class="card toolbar">
+    <label class="field">Admin secret<input id="secret" type="password" placeholder="LIVEPLAY_ADMIN_SECRET" autocomplete="current-password" /></label>
+    <label class="field">Buscar email<input id="search" placeholder="cliente@email.com" /></label>
+    <button id="btnLoadUsers" type="button">Buscar usuários</button>
+    <button id="btnClearLog" class="secondary" type="button">Limpar log</button>
+    <label class="remember"><input id="rememberSecret" type="checkbox" /> Lembrar neste navegador</label>
+    <button id="btnForgetSecret" class="secondary" type="button">Esquecer senha salva</button>
+    <div class="muted small" style="grid-column:span 2">Use apenas no seu PC. Se estiver em computador de outra pessoa, não marque para lembrar.</div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <label class="field">Email do usuário<input id="email" placeholder="cliente@email.com" /></label>
+      <label class="field">Plano<select id="plan"><option value="FREE">FREE</option><option value="PRO">PRO</option></select></label>
+      <label class="field">Status<select id="status"><option value="active">active</option><option value="inactive">inactive</option><option value="expired">expired</option><option value="canceled">canceled</option></select></label>
+      <label class="field">Expira em<input id="expiresAt" type="datetime-local" /></label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="btnSetPlan" type="button">Salvar plano</button>
+      <button id="btnPro30" class="okBtn" type="button">PRO +30 dias</button>
+      <button id="btnPro7" class="secondary" type="button">PRO +7 dias</button>
+      <button id="btnSetFree" class="dangerBtn" type="button">Voltar para FREE</button>
+      <button id="btnClearForm" class="secondary" type="button">Limpar formulário</button>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:12px"><div><b>Usuários</b><div class="muted">Clique em selecionar para editar rápido.</div></div><button id="btnReload" class="secondary" type="button">Atualizar</button></div><div class="users" id="users"><div class="muted">Busque usuários para começar.</div></div></div>
+    <div class="card"><b>Log</b><pre id="log">Pronto.</pre></div>
+  </div>
 </div>
+<div id="toast" class="toast"></div>
 <script>
 (function(){
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/admin/sw.js').catch(function(){}); }
-  const logEl = document.getElementById('log');
-  function secret(){ return document.getElementById('secret').value.trim(); }
+  var STORAGE_KEY = 'liveplay_admin_secret_v1';
+  var REMEMBER_KEY = 'liveplay_admin_secret_remember_v1';
+  var lastUsers = [];
+  var logEl = document.getElementById('log');
+  var toastEl = document.getElementById('toast');
+  function byId(id){ return document.getElementById(id); }
+  function secret(){ return byId('secret').value.trim(); }
   function log(v){ logEl.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); }
-  function clearLog(){ log('Pronto.'); }
+  function toast(message){ toastEl.textContent = message; toastEl.classList.add('show'); window.setTimeout(function(){ toastEl.classList.remove('show'); }, 1800); }
+  function saveSecretIfNeeded(){ try{ if(byId('rememberSecret').checked && secret()){ localStorage.setItem(STORAGE_KEY, secret()); localStorage.setItem(REMEMBER_KEY, '1'); } }catch(e){} }
+  function loadSavedSecret(){ try{ var remember = localStorage.getItem(REMEMBER_KEY) === '1'; byId('rememberSecret').checked = remember; if(remember){ byId('secret').value = localStorage.getItem(STORAGE_KEY) || ''; } }catch(e){} }
+  function forgetSecret(){ try{ localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(REMEMBER_KEY); }catch(e){} byId('rememberSecret').checked = false; byId('secret').value = ''; toast('Senha esquecida neste navegador.'); }
   async function api(path, options){
-    options = options || {};
-    const headers = Object.assign({
-      'Content-Type': 'application/json',
-      'x-liveplay-admin-secret': secret()
-    }, options.headers || {});
-    const res = await fetch(path, Object.assign({}, options, { headers }));
-    const data = await res.json().catch(function(){ return null; });
-    if(!res.ok || !data || data.ok !== true){
-      throw new Error((data && data.error) ? data.error : ('Falha HTTP ' + res.status));
-    }
+    options = options || {}; saveSecretIfNeeded();
+    var headers = Object.assign({'Content-Type':'application/json','x-liveplay-admin-secret':secret()}, options.headers || {});
+    var res = await fetch(path, Object.assign({}, options, { headers: headers }));
+    var data = await res.json().catch(function(){ return null; });
+    if(!res.ok || !data || data.ok !== true){ throw new Error((data && data.error) ? data.error : ('Falha HTTP ' + res.status)); }
     return data;
   }
-  function fillEmail(email){
-    document.getElementById('email').value = email || '';
+  function formatDate(value){ if(!value) return 'sem expiração'; try{ return new Date(value).toLocaleString('pt-BR'); }catch(e){ return String(value); } }
+  function setStats(users){
+    var total = users.length, pro = 0, free = 0, expired = 0;
+    users.forEach(function(u){ var plan = (u.effectivePlan && u.effectivePlan.plan) || 'FREE'; var status = (u.effectivePlan && u.effectivePlan.status) || ''; if(plan === 'PRO') pro++; else free++; if(status === 'expired') expired++; });
+    byId('statTotal').textContent = total; byId('statPro').textContent = pro; byId('statFree').textContent = free; byId('statExpired').textContent = expired;
+  }
+  function fillUser(u){
+    var sub = u.subscription || {}; var effective = u.effectivePlan || {}; var plan = effective.plan || sub.plan || 'FREE';
+    byId('email').value = u.email || ''; byId('plan').value = plan === 'PRO' ? 'PRO' : 'FREE'; byId('status').value = sub.status || effective.status || 'active'; byId('expiresAt').value = sub.expires_at ? String(sub.expires_at).slice(0,16) : ''; toast('Usuário selecionado.');
+  }
+  function setExpirationDays(days){ var d = new Date(); d.setDate(d.getDate() + days); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); byId('expiresAt').value = d.toISOString().slice(0,16); byId('plan').value = 'PRO'; byId('status').value = 'active'; }
+  function renderUsers(users){
+    var box = byId('users'); box.innerHTML = ''; setStats(users);
+    if(!users.length){ box.innerHTML = '<div class="muted">Nenhum usuário encontrado.</div>'; return; }
+    users.forEach(function(u){
+      var plan = (u.effectivePlan && u.effectivePlan.plan) || 'FREE'; var status = (u.effectivePlan && u.effectivePlan.status) || '-'; var sub = u.subscription || {}; var div = document.createElement('div'); div.className = 'user';
+      var top = document.createElement('div'); top.className = 'userTop';
+      var email = document.createElement('div'); email.className = 'email'; email.textContent = u.email || '';
+      var pill = document.createElement('span'); pill.className = 'pill ' + (plan === 'PRO' ? 'pro' : 'free'); if(status === 'expired') pill.className = 'pill expired'; pill.textContent = plan;
+      top.appendChild(email); top.appendChild(pill);
+      var meta = document.createElement('div'); meta.className = 'muted'; meta.textContent = 'status: ' + (sub.status || status) + ' · expira: ' + formatDate(sub.expires_at || (u.effectivePlan && u.effectivePlan.expiresAt));
+      var row = document.createElement('div'); row.className = 'row';
+      var select = document.createElement('button'); select.className = 'secondary'; select.type = 'button'; select.textContent = 'Selecionar'; select.addEventListener('click', function(){ fillUser(u); });
+      var pro30 = document.createElement('button'); pro30.type = 'button'; pro30.textContent = '+30 dias'; pro30.addEventListener('click', async function(){ fillUser(u); setExpirationDays(30); await setPlan(); });
+      var free = document.createElement('button'); free.className = 'dangerBtn'; free.type = 'button'; free.textContent = 'FREE'; free.addEventListener('click', async function(){ fillUser(u); byId('plan').value='FREE'; byId('status').value='active'; byId('expiresAt').value=''; await setPlan(); });
+      row.appendChild(select); row.appendChild(pro30); row.appendChild(free);
+      div.appendChild(top); div.appendChild(meta); div.appendChild(row); box.appendChild(div);
+    });
   }
   async function loadUsers(){
-    try{
-      const q = encodeURIComponent(document.getElementById('search').value.trim());
-      const data = await api('/admin/users?limit=50&search=' + q);
-      const box = document.getElementById('users');
-      box.innerHTML = '';
-      if(!data.users || data.users.length === 0){
-        box.innerHTML = '<div class="muted">Nenhum usuário encontrado.</div>';
-      }
-      (data.users || []).forEach(function(u){
-        const plan = (u.effectivePlan && u.effectivePlan.plan) || 'FREE';
-        const sub = u.subscription || {};
-        const div = document.createElement('div');
-        div.className = 'user';
-        const header = document.createElement('div');
-        header.innerHTML = '<b></b> <span class="pill"></span>';
-        header.querySelector('b').textContent = u.email || '';
-        const pill = header.querySelector('.pill');
-        pill.textContent = plan;
-        pill.classList.add(plan === 'PRO' ? 'pro' : 'free');
-        const meta = document.createElement('div');
-        meta.className = 'muted';
-        meta.textContent = 'status: ' + (sub.status || '-') + ' · expira: ' + (sub.expires_at || 'sem expiração');
-        const row = document.createElement('div');
-        row.className = 'row';
-        const btn = document.createElement('button');
-        btn.className = 'secondary';
-        btn.type = 'button';
-        btn.textContent = 'Selecionar';
-        btn.addEventListener('click', function(){
-          fillEmail(u.email || '');
-          document.getElementById('plan').value = plan === 'PRO' ? 'PRO' : 'FREE';
-          document.getElementById('status').value = sub.status || 'active';
-          document.getElementById('expiresAt').value = sub.expires_at ? String(sub.expires_at).slice(0,16) : '';
-        });
-        row.appendChild(btn);
-        div.appendChild(header);
-        div.appendChild(meta);
-        div.appendChild(row);
-        box.appendChild(div);
-      });
-      log(data);
-    }catch(e){ log('Erro: ' + e.message); }
+    try{ var q = encodeURIComponent(byId('search').value.trim()); var data = await api('/admin/users?limit=100&search=' + q); lastUsers = data.users || []; renderUsers(lastUsers); log(data); toast('Usuários carregados.'); }catch(e){ log('Erro: ' + e.message); toast('Erro ao carregar.'); }
   }
   async function setPlan(){
-    try{
-      const body = {
-        email: document.getElementById('email').value.trim(),
-        plan: document.getElementById('plan').value,
-        status: document.getElementById('status').value,
-        expiresAt: document.getElementById('expiresAt').value || null
-      };
-      const data = await api('/admin/set-plan', { method: 'POST', body: JSON.stringify(body) });
-      log(data);
-      await loadUsers();
-    }catch(e){ log('Erro: ' + e.message); }
+    try{ var body = { email: byId('email').value.trim(), plan: byId('plan').value, status: byId('status').value, expiresAt: byId('expiresAt').value || null }; var data = await api('/admin/set-plan', { method:'POST', body:JSON.stringify(body) }); log(data); toast('Plano salvo.'); await loadUsers(); }catch(e){ log('Erro: ' + e.message); toast('Erro ao salvar.'); }
   }
-  async function setFree(){
-    document.getElementById('plan').value = 'FREE';
-    document.getElementById('status').value = 'active';
-    document.getElementById('expiresAt').value = '';
-    await setPlan();
-  }
-  document.getElementById('btnLoadUsers').addEventListener('click', loadUsers);
-  document.getElementById('btnClearLog').addEventListener('click', clearLog);
-  document.getElementById('btnSetPlan').addEventListener('click', setPlan);
-  document.getElementById('btnSetFree').addEventListener('click', setFree);
+  function clearForm(){ byId('email').value=''; byId('plan').value='FREE'; byId('status').value='active'; byId('expiresAt').value=''; }
+  byId('btnLoadUsers').addEventListener('click', loadUsers); byId('btnReload').addEventListener('click', loadUsers); byId('btnClearLog').addEventListener('click', function(){ log('Pronto.'); }); byId('btnSetPlan').addEventListener('click', setPlan); byId('btnForgetSecret').addEventListener('click', forgetSecret); byId('btnClearForm').addEventListener('click', clearForm);
+  byId('btnPro30').addEventListener('click', async function(){ setExpirationDays(30); await setPlan(); }); byId('btnPro7').addEventListener('click', async function(){ setExpirationDays(7); await setPlan(); }); byId('btnSetFree').addEventListener('click', async function(){ byId('plan').value='FREE'; byId('status').value='active'; byId('expiresAt').value=''; await setPlan(); });
+  byId('search').addEventListener('keydown', function(e){ if(e.key === 'Enter') loadUsers(); }); byId('secret').addEventListener('keydown', function(e){ if(e.key === 'Enter') loadUsers(); });
+  loadSavedSecret(); if(secret()){ window.setTimeout(loadUsers, 250); }
 })();
-</script></body></html>`;
+</script>
+</body></html>`;
 }
 
 function oauthSuccessHtml() {
