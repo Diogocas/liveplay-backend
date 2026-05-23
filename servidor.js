@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 10000;
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://liveplay-backend.onrender.com';
 const MERCADOPAGO_ACCESS_TOKEN = String(process.env.MERCADOPAGO_ACCESS_TOKEN || '').trim();
-const LIVEPLAY_PRO_PRICE = Number(String(process.env.LIVEPLAY_PRO_PRICE || '50.00').replace(',', '.')) || 50;
+const LIVEPLAY_PRO_PRICE = Number(String(process.env.LIVEPLAY_PRO_PRICE || '59.90').replace(',', '.')) || 50;
 
 let overlayClients = [];
 let videoClients = [];
